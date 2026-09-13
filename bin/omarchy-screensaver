@@ -2,6 +2,27 @@
 
 # omarchy:summary=Run the Omarchy screensaver using random effects from TTE.
 
+artworks=("$HOME/.config/omarchy/branding/screensaver.txt")
+playback_directory=""
+
+cleanup_artwork() {
+  [[ -z $playback_directory ]] || rm -rf -- "$playback_directory"
+}
+trap cleanup_artwork EXIT
+trap 'exit 0' SIGINT SIGTERM SIGHUP SIGQUIT
+
+# No setting preserves the existing, live-editable single-file behavior.
+source_path=$(jq -er '.screensaver.source | select(type == "string" and length > 0)' "$HOME/.config/omarchy/shell.json" 2>/dev/null) || source_path=""
+if [[ -n $source_path ]]; then
+  if playback_directory=$(mktemp -d); then
+    if timeout 5s omarchy-screensaver-prepare "$source_path" "$playback_directory"; then
+      artworks=("$playback_directory"/*.txt)
+    fi
+  fi
+fi
+[[ -s ${artworks[0]} ]] || artworks=("$OMARCHY_PATH/logo.txt")
+artwork_index=0
+
 screensaver_in_focus() {
   hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
 }
@@ -36,7 +57,7 @@ wait_for_terminal_resize() {
 wait_for_terminal_resize
 
 while true; do
-  ttfx -i ~/.config/omarchy/branding/screensaver.txt \
+  ttfx -i "${artworks[artwork_index]}" \
     --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c\
     --random-effect --no-eol --no-restore-cursor &
 
@@ -45,4 +66,5 @@ while true; do
       exit_screensaver
     fi
   done
+  artwork_index=$(( (artwork_index + 1) % ${#artworks[@]} ))
 done

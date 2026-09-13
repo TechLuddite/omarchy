@@ -26,6 +26,22 @@ There are three entries in that menu:
 - **Set From Image** opens a file picker for a png or svg, converts it to ASCII, and shows you the result. Logos with a clear silhouette work far better than photos.
 - **Restore Default** puts the Omarchy logo back.
 
+#### Text collections
+
+To rotate several ASCII or braille artworks, add a `screensaver` block to `~/.config/omarchy/shell.json` alongside `idle`:
+
+```json
+"screensaver": {
+  "source": "~/Pictures/screensaver-art"
+}
+```
+
+The source can be an absolute path or a path starting with `~/`, pointing to either one text file or a directory of `.txt` files. A directory plays in filename order, advancing after each animation finishes and wrapping at the end. Each monitor runs its own animations, so changes are not synchronized between monitors. The existing `idle.screensaver` setting still controls when the screensaver starts.
+
+Collections contain plain UTF-8 text, including braille and block characters. Convert images with `omarchy transcode ascii` first. Files containing terminal escape sequences are skipped, as are empty, invalid, or oversized files. Each file may be at most 64 KiB, 128 lines, and 512 characters per line after tab expansion. Up to 128 artworks are loaded from a directory with at most 4096 entries. Hidden files, nested directories, symbolic-link entries, and special files are not played. The selected source itself may be a symbolic link.
+
+The collection is copied for playback when the screensaver starts; edits appear the next time it opens. Omarchy never modifies the source. An unavailable or unusable source falls back to your existing screensaver logo. Remove `screensaver.source` to return to the live-editable logo and the usual branding menu behavior; the menu continues to edit that fallback logo while a source override is set.
+
 ### About screen
 
 The same three options are under _Style > About_ for the _About_ screen you get from the Omarchy menu, and they work identically — the file is `~/.config/omarchy/branding/about.txt`, and the About window pops up after each change. The About art is converted to a smaller size than the screensaver's, since it has to fit in a window rather than fill your display.
