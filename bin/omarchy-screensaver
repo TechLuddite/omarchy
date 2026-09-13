@@ -22,15 +22,34 @@ if [[ -n $source_path ]]; then
 fi
 [[ -s ${artworks[0]} ]] || artworks=("$OMARCHY_PATH/logo.txt")
 artwork_index=0
+effect_pid=""
 
 screensaver_in_focus() {
-  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+  local window class
+  window=$(hyprctl activewindow -j 2>/dev/null) || return 0
+  class=$(jq -er '.class | select(type == "string" and length > 0)' <<<"$window" 2>/dev/null) || return 0
+  [[ $class == "org.omarchy.screensaver" ]]
 }
 
 exit_screensaver() {
+  trap "" SIGINT SIGTERM SIGHUP SIGQUIT
   hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
-  pkill -x ttfx 2>/dev/null
-  pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+  if [[ -n $effect_pid ]]; then
+    kill "$effect_pid" 2>/dev/null || true
+    for ((attempt = 0; attempt < 20; attempt++)); do
+      kill -0 "$effect_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$effect_pid" 2>/dev/null; then kill -KILL "$effect_pid" 2>/dev/null || true; fi
+    wait "$effect_pid" 2>/dev/null || true
+  fi
+  # Close actual screensaver windows, never processes whose command lines merely
+  # contain the class name. Each window's renderer reaps its own effect child.
+  while IFS= read -r address; do
+    [[ $address =~ ^0x[[:xdigit:]]+$ ]] || continue
+    hyprctl dispatch "hl.dsp.window.close({ window = \"address:$address\" })" >/dev/null 2>&1 ||
+      hyprctl dispatch closewindow "address:$address" >/dev/null 2>&1 || true
+  done < <(hyprctl clients -j 2>/dev/null | jq -r '.[] | select(.class == "org.omarchy.screensaver") | .address')
   exit 0
 }
 
@@ -40,8 +59,6 @@ trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
 printf '\033]11;rgb:00/00/00\007'  # Set background color to black
 
 hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
-
-tty=$(tty 2>/dev/null)
 
 # Terminals allocate the pty at the default 80x24 and only resize it once the
 # compositor has told the window how big it is. ttfx measures the terminal once,
@@ -61,10 +78,18 @@ while true; do
     --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c\
     --random-effect --no-eol --no-restore-cursor &
 
-  while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
+  effect_pid=$!
+
+  while kill -0 "$effect_pid" 2>/dev/null; do
     if read -n1 -t 1 || ! screensaver_in_focus; then
       exit_screensaver
     fi
   done
+  if ! wait "$effect_pid"; then
+    # A broken effect must neither busy-loop nor close the idle window.
+    read -n1 -t 1 && exit_screensaver
+  fi
+  effect_pid=""
+  screensaver_in_focus || exit_screensaver
   artwork_index=$(( (artwork_index + 1) % ${#artworks[@]} ))
 done

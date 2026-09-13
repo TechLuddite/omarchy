@@ -146,4 +146,54 @@ fi
   (branding / "screensaver.txt").unlink()
   play({"screensaver": {"source": str(empty)}})
   check(set(calls.read_text().splitlines()) == {str(root / 'logo.txt')}, "missing user fallback uses the bundled logo")
+  # Cleanup must not match unrelated process command lines or ttfx instances.
+  import shutil
+  import time
+  sleeper = temp / 'org.omarchy.screensaver-unrelated' / 'ttfx'
+  sleeper.parent.mkdir()
+  shutil.copy2('/usr/bin/sleep', sleeper)
+  unrelated = subprocess.Popen([str(sleeper), '30'])
+  owned_pid = temp / 'owned-pid'
+  dispatches = temp / 'dispatches'
+  broad_kills = temp / 'broad-kills'
+  environment.update(OWNED_PID=str(owned_pid), DISPATCHES=str(dispatches), BROAD_KILLS=str(broad_kills))
+  stub('ttfx', 'echo $$ > "$OWNED_PID"\nexec sleep 30\n')
+  stub('pkill', 'echo unsafe >> "$BROAD_KILLS"\n')
+  stub('hyprctl', '''case "$1" in
+activewindow) echo '{"class":"org.omarchy.screensaver"}';;
+clients) echo '[{"class":"org.omarchy.screensaver","address":"0x123"},{"class":"other","address":"0x456"},{"class":"org.omarchy.screensaver","address":"bad;command"}]';;
+dispatch) printf "%s\\n" "$2" >> "$DISPATCHES";;
+esac
+''')
+  process = subprocess.Popen([root / 'bin/omarchy-screensaver'], env=environment,
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  try:
+    deadline = time.monotonic() + 5
+    while not owned_pid.exists() and time.monotonic() < deadline:
+      time.sleep(.02)
+    check(owned_pid.exists(), 'runtime starts an owned animation child')
+    child_pid = int(owned_pid.read_text())
+    process.communicate(b'x', timeout=5)
+    check(process.returncode == 0 and unrelated.poll() is None and not broad_kills.exists(),
+          'dismissal leaves unrelated ttfx and matching command lines alone')
+    check(not Path(f'/proc/{child_pid}').exists(), 'dismissal reaps its owned animation child')
+    check('address:0x123' in dispatches.read_text() and '0x456' not in dispatches.read_text()
+          and 'bad;command' not in dispatches.read_text(), 'cleanup closes only validated screensaver window addresses')
+  finally:
+    if process.poll() is None:
+      process.kill()
+    process.wait()
+    unrelated.terminate()
+    unrelated.wait()
+  stub('ttfx', 'exit 1\n')
+  stub('hyprctl', 'exit 1\n')
+  process = subprocess.Popen([root / 'bin/omarchy-screensaver'], env=environment,
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+  try:
+    time.sleep(1.2)
+    check(process.poll() is None, 'renderer failure and unavailable compositor do not dismiss the idle window')
+  finally:
+    process.terminate()
+    process.communicate(timeout=5)
+
 PY
