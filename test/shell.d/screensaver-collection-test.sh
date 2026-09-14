@@ -5,6 +5,7 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 require_command python3
+require_command magick
 
 python3 - "$ROOT" <<'PY'
 import json
@@ -54,11 +55,49 @@ with tempfile.TemporaryDirectory() as temporary:
   (source / "empty.txt").write_text(" \n\t")
   (source / "escape-sequence.txt").write_text("\x1b]52;c;SEVMTE8=\x07")
   (source / "c1.txt").write_text("\u009b31m")
-  (source / "oversize.txt").write_text("X" * 65537)
+  (source / "oversize.txt").write_text("X" * 1048577)
   (source / "wide.txt").write_text("X" * 513)
   (source / "tall.txt").write_text("X\n" * 129)
+  (source / "long-sgr.txt").write_text("\x1b[" + "1;" * 30 + "m" + "X")
+  (source / "sgr-then-osc.txt").write_text("\x1b[31mX\x1b]0;title\x07")
+  (source / "sgr-cursor.txt").write_text("\x1b[31mX\x1b[2J")
+  (source / "sgr-overflow.txt").write_text("\x1b[99999999999999999999mX")
+  (source / "sgr-big-value.txt").write_text("\x1b[38;5;300mX")
+  (source / "sgr-bad-arity.txt").write_text("\x1b[38;7;1mX")
+  (source / "sgr-dangling.txt").write_text("\x1b[38mX")
   check(run() == ["FIRST\n", "⣿⣿⣿\nSECOND\n"], "links, special files, non-text files, controls and excessive artwork are skipped")
   run(source / "pipe.txt", success=False)
+  colour = "\x1b[38;2;255;0;0;48;2;0;0;255m▀▄\x1b[0m\n"
+  (source / "00-colour.txt").write_text(colour)
+  check(run()[0] == colour, "SGR colour sequences pass through unchanged")
+  (source / "00-colour.txt").write_text(("\x1b[38;2;1;2;3;48;2;4;5;6m" + "█" * 500 + "\x1b[0m\n") * 120)
+  check(len(run()[0].encode()) > 65536, "a colour picture larger than the old 64 KiB limit is accepted")
+  (source / "00-colour.txt").write_text("\x1b[38;2;1;2;3m" + "X" * 513 + "\x1b[0m\n")
+  check(run()[0] == "FIRST\n", "the line limit applies to visible text, not to colour sequences")
+  (source / "00-colour.txt").write_text("\x1b[38;2;1;2;3m \x1b[0m\n")
+  check(run()[0] == "FIRST\n", "colour around blank text is still empty artwork")
+  (source / "00-colour.txt").write_text("\x1b[0;1;38;5;196;48;2;0;0;0mX\x1b[m\n")
+  check(run()[0].startswith("\x1b[0;1;38;5;196"), "attribute, 256-colour and empty SGR parameters are accepted")
+  (source / "00-colour.txt").write_text("X" * 513 + "\n" + "\x1b[m" * 300000 + "\n")
+  import time
+  started = time.monotonic()
+  check(run()[0] == "FIRST\n" and time.monotonic() - started < 2, "a large over-wide file is rejected quickly")
+  for name in ("00-colour.txt", "long-sgr.txt", "sgr-then-osc.txt", "sgr-cursor.txt", "sgr-overflow.txt",
+               "sgr-big-value.txt", "sgr-bad-arity.txt", "sgr-dangling.txt"):
+    (source / name).unlink()
+
+  import re
+  image = temp / "photo.png"
+  subprocess.run(["magick", "-size", "120x80", "gradient:red-blue", str(image)], check=True, timeout=30)
+  converted = temp / "photo.txt"
+  subprocess.run([root / "bin/omarchy-transcode-ascii", str(image), str(converted), "--mode", "color",
+                  "--width", "40", "--height", "20"], check=True, capture_output=True, timeout=60)
+  visible = re.sub(r"\x1b\[[0-9;]*m", "", converted.read_text())
+  check(0 < len(visible.splitlines()) <= 20 and all(0 < len(line) <= 40 for line in visible.splitlines())
+        and set(visible.replace("\n", "")) <= set("▘▝▀▖▌▞▛▗▚▐▜▄▙▟█"),
+        "colour conversion fits the cell box using block glyphs only")
+  check("\x1b[38;2;" in converted.read_text() and run(converted) == [converted.read_text()],
+        "colour conversion carries truecolour and passes playback validation")
 
   marker = temp / "EXECUTED"
   hostile = source / "03-$(touch EXECUTED) `touch EXECUTED`\n--help.txt"
@@ -137,6 +176,27 @@ fi
   check(play({"screensaver": {"source": str(empty)}}) == ["DEFAULT"] * 4, "empty collection keeps the screensaver alive with its fallback")
   check(play({"screensaver": {"source": str(temp / 'missing')}}) == ["DEFAULT"] * 4, "missing source falls back instead of exiting")
   check(play({"screensaver": {"source": 42}}) == ["DEFAULT"] * 4, "invalid config type retains the default")
+  stub("ttfx", 'printf "%s\\n" "$*" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
+  play({"screensaver": {"source": str(source), "effects": ["wipe", "beams"]}})
+  check(calls.read_text().splitlines() and all("--include-effects wipe beams --no-eol" in line
+        and "--existing-color-handling ignore" in line for line in calls.read_text().splitlines()),
+        "configured effects reach the renderer and plain text keeps the effect gradient")
+  (source / "00-colour.txt").write_text("\x1b[38;2;255;0;0m▀\x1b[0m\n")
+  play({"screensaver": {"source": str(source)}})
+  handling = [line.split("--existing-color-handling ")[1].split()[0] for line in calls.read_text().splitlines()]
+  check(handling[:2] == ["dynamic", "ignore"], "colour artwork settles on its own colours, plain artwork does not")
+  (source / "00-colour.txt").unlink()
+  play({"screensaver": {"source": str(source), "effects": ["wipe", "../x"]}})
+  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "an invalid effect name disables the whole list")
+  play({"screensaver": {"source": str(source), "effects": ["wipe", 5]}})
+  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "a non-string entry disables the whole list")
+  play({"screensaver": {"source": str(source), "effects": "wipe"}})
+  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "a non-array effects setting is ignored")
+  stub("ttfx", 'if [[ " $* " == *" --include-effects "* ]]; then exit 1; fi\nprintf "%s\\n" "$*" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
+  play({"screensaver": {"source": str(source), "effects": ["nosuch"]}})
+  check(calls.read_text().splitlines() and all("--include-effects" not in line for line in calls.read_text().splitlines()),
+        "an effect list ttfx rejects is dropped and playback continues unfiltered")
+  stub("ttfx", 'printf "%s\\n" "$2" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
   stub("mktemp", 'exit 1\n')
   check(play({"screensaver": {"source": str(source)}}) == ["DEFAULT"] * 4, "temporary-directory failure retains playback")
   (stubs / "mktemp").unlink()

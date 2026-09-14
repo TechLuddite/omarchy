@@ -2,7 +2,7 @@
 
 # omarchy:summary=Convert a local raster image folder into a screensaver text collection
 # omarchy:hidden=true
-# omarchy:args=<image-directory>
+# omarchy:args=<image-directory> [--mode <color|braille|block>]
 
 python3 - "$@" <<'PY'
 import json
@@ -40,9 +40,15 @@ def convert(command, environment, deadline):
 
 
 def main():
-  if len(sys.argv) != 2:
-    raise ValueError("expected an image directory")
-  source = Path(sys.argv[1]).expanduser().resolve(strict=True)
+  arguments = sys.argv[1:]
+  mode = 'color'
+  if '--mode' in arguments:
+    position = arguments.index('--mode')
+    mode = arguments[position + 1] if position + 1 < len(arguments) else ''
+    arguments = arguments[:position] + arguments[position + 2:]
+  if len(arguments) != 1 or mode not in ('color', 'braille', 'block'):
+    raise ValueError("expected an image directory and optionally --mode color|braille|block")
+  source = Path(arguments[0]).expanduser().resolve(strict=True)
   root = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
   base = Path.home() / '.local/share/omarchy/screensavers'
   base.mkdir(parents=True, exist_ok=True)
@@ -113,7 +119,7 @@ def main():
         snapshot = scratch / ('input' + suffix)
         snapshot.write_bytes(data)
         target = output / f'{len(records):03d}.txt'
-        convert(['omarchy-transcode-ascii', str(snapshot), str(target)], environment, deadline)
+        convert(['omarchy-transcode-ascii', str(snapshot), str(target), '--mode', mode], environment, deadline)
         snapshot.unlink()
         records.append({'source': name, 'artwork': target.name})
         print(f'Converted {len(records)}/{len(names)}', file=sys.stderr)
@@ -125,7 +131,7 @@ def main():
                        check=True, timeout=5, stdout=subprocess.DEVNULL)
         if len(list(Path(validation).glob('*.txt'))) != len(records):
           raise ValueError("converted artwork failed text validation")
-    (output / 'manifest.json').write_text(json.dumps({'source': str(source), 'images': records}, indent=2))
+    (output / 'manifest.json').write_text(json.dumps({'source': str(source), 'mode': mode, 'images': records}, indent=2))
     print(output)
   except BaseException:
     shutil.rmtree(output)
