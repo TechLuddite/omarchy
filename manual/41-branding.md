@@ -41,18 +41,15 @@ omarchy branding screensaver folder ~/Pictures/screensaver-art
 
 Image folders are imported once into `~/.local/share/omarchy/screensavers/import-*`. Files are ordered numerically within their names (`1`, `2`, …, `18`); the generated text collection preserves that order. Each image is converted in colour by default (truecolour quadrant blocks at the converter's 80×26 maximum size); `omarchy-screensaver-import ~/Pictures/giants --mode braille` gives the monochrome style. Source images are unchanged. Run the import again to include later changes; conversion does not run during idle startup. Prior imports are retained so an existing selection is never deleted; you may remove unused import folders yourself.
 
-Batch import accepts up to 128 visible PNG, JPEG or WebP candidates in a nonrecursive folder with at most 4096 entries. Symlink entries and special files are skipped. A selected root folder may itself be a symlink. Files are read through directory-relative descriptors into private snapshots, with a 20 MiB per-image and 256 MiB total input limit. Raster signatures are checked; the converter runs with restricted ImageMagick coders/delegates and resource limits, a 15-second per-image deadline and a 120-second batch conversion deadline. Unsupported or unconvertible candidate images abort the import without selecting a partial collection. SVG remains supported through **Set From Image**, but is excluded from batch imports because it can reference external resources.
+Batch import accepts up to 128 visible PNG, JPEG or WebP images, with a 20 MiB limit per image. It skips hidden files, subfolders, symlinks and special files. An unsupported or unconvertible image aborts the import and preserves the previous selection. SVG remains available through **Set From Image**.
 
 To configure a text source directly, add a `screensaver` block to `~/.config/omarchy/shell.json` alongside `idle`:
 
 ```json
 "screensaver": {
-  "source": "~/Pictures/screensaver-art",
-  "effects": ["beams", "burn", "rain", "swarm"]
+  "source": "~/Pictures/screensaver-art"
 }
 ```
-
-`effects` is optional and limits the random rotation to the named `ttfx` effects (`ttfx --help` lists them). Every entry must be a plain lowercase word; otherwise the whole list is ignored and every effect stays in rotation. A list that names no real effect is dropped after the first failed attempt.
 
 The source can be an absolute path or a path starting with `~/`, pointing to either one text file or a directory of `.txt` files. A directory plays in filename order, advancing after each animation finishes and wrapping at the end. Each monitor runs its own animations, so changes are not synchronized between monitors. The existing `idle.screensaver` setting still controls when the screensaver starts.
 

@@ -99,6 +99,28 @@ with tempfile.TemporaryDirectory() as temporary:
   check("\x1b[38;2;" in converted.read_text() and run(converted) == [converted.read_text()],
         "colour conversion carries truecolour and passes playback validation")
 
+  # Sub-cell raster dimensions must still yield visible, preparable artwork.
+  for dimensions in ("1000x1", "1x1000", "3x5"):
+    subprocess.run(["magick", "-size", dimensions, "gradient:red-blue", str(image)],
+                   check=True, capture_output=True, timeout=30)
+    subprocess.run([root / "bin/omarchy-transcode-ascii", str(image), str(converted),
+                    "--mode", "color", "--no-trim"], check=True, capture_output=True, timeout=30)
+    check(run(converted) == [converted.read_text()],
+          "thin and odd-sized colour rasters produce playable cells: " + dimensions)
+
+  # Exercise the runtime's actual deadline on a full, valid colour collection,
+  # not just cheap rejection of an oversized line. Vary every cell's colour.
+  large = temp / "large-colour-collection"
+  large.mkdir()
+  large_text = "".join(
+    "".join(f"\x1b[38;2;{x};{y};100;48;2;100;128;255m█" for x in range(200))
+    + "\x1b[0m\n" for y in range(128))
+  check(len(large_text.encode()) <= 1048576, "deadline fixture fits the per-artwork byte limit")
+  for index in range(128):
+    (large / f"{index:03d}.txt").write_text(large_text)
+  check(run(large) == [large_text] * 128,
+        "128 large valid colour artworks prepare within the five-second runtime deadline")
+
   marker = temp / "EXECUTED"
   hostile = source / "03-$(touch EXECUTED) `touch EXECUTED`\n--help.txt"
   hostile.write_text("LITERAL NAME\n")
@@ -177,25 +199,11 @@ fi
   check(play({"screensaver": {"source": str(temp / 'missing')}}) == ["DEFAULT"] * 4, "missing source falls back instead of exiting")
   check(play({"screensaver": {"source": 42}}) == ["DEFAULT"] * 4, "invalid config type retains the default")
   stub("ttfx", 'printf "%s\\n" "$*" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
-  play({"screensaver": {"source": str(source), "effects": ["wipe", "beams"]}})
-  check(calls.read_text().splitlines() and all("--include-effects wipe beams --no-eol" in line
-        and "--existing-color-handling ignore" in line for line in calls.read_text().splitlines()),
-        "configured effects reach the renderer and plain text keeps the effect gradient")
   (source / "00-colour.txt").write_text("\x1b[38;2;255;0;0m▀\x1b[0m\n")
   play({"screensaver": {"source": str(source)}})
   handling = [line.split("--existing-color-handling ")[1].split()[0] for line in calls.read_text().splitlines()]
   check(handling[:2] == ["dynamic", "ignore"], "colour artwork settles on its own colours, plain artwork does not")
   (source / "00-colour.txt").unlink()
-  play({"screensaver": {"source": str(source), "effects": ["wipe", "../x"]}})
-  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "an invalid effect name disables the whole list")
-  play({"screensaver": {"source": str(source), "effects": ["wipe", 5]}})
-  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "a non-string entry disables the whole list")
-  play({"screensaver": {"source": str(source), "effects": "wipe"}})
-  check(all("--include-effects" not in line for line in calls.read_text().splitlines()), "a non-array effects setting is ignored")
-  stub("ttfx", 'if [[ " $* " == *" --include-effects "* ]]; then exit 1; fi\nprintf "%s\\n" "$*" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
-  play({"screensaver": {"source": str(source), "effects": ["nosuch"]}})
-  check(calls.read_text().splitlines() and all("--include-effects" not in line for line in calls.read_text().splitlines()),
-        "an effect list ttfx rejects is dropped and playback continues unfiltered")
   stub("ttfx", 'printf "%s\\n" "$2" >> "$CALL_LOG"\nhead -n 1 -- "$2" >> "$FRAME_LOG"\n')
   stub("mktemp", 'exit 1\n')
   check(play({"screensaver": {"source": str(source)}}) == ["DEFAULT"] * 4, "temporary-directory failure retains playback")
